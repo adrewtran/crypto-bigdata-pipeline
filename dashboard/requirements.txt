@@ -1,0 +1,9 @@
+streamlit==1.36.0
+streamlit-autorefresh==1.0.1
+pandas==2.2.2
+plotly==5.22.0
+PyHive==0.7.0
+thrift==0.20.0
+thrift-sasl==0.4.3
+pure-sasl==0.6.2
+SQLAlchemy==2.0.31

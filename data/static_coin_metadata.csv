@@ -1,0 +1,4 @@
+symbol,coin_name,category
+BTCUSDT,Bitcoin,Layer 1
+ETHUSDT,Ethereum,Layer 1 / Smart Contract
+SOLUSDT,Solana,Layer 1 / High Throughput

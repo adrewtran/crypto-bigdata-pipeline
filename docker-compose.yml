@@ -1,0 +1,187 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: crypto-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: crypto-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: crypto-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-crypto-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: crypto-namenode
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    environment:
+      CLUSTER_NAME: crypto-hadoop
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: crypto-datanode
+    depends_on:
+      - namenode
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      SERVICE_PRECONDITION: "namenode:9870"
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+
+  hive-metastore-postgresql:
+    image: bde2020/hive-metastore-postgresql:2.3.0
+    container_name: crypto-hive-metastore-db
+    ports:
+      - "5432:5432"
+    volumes:
+      - hive_metastore_db:/var/lib/postgresql/data
+
+  hive-metastore:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: crypto-hive-metastore
+    depends_on:
+      - namenode
+      - datanode
+      - hive-metastore-postgresql
+    command: sh /opt/hive-bootstrap/hive-metastore-entrypoint.sh
+    ports:
+      - "9083:9083"
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionURL: jdbc:postgresql://hive-metastore-postgresql/metastore
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName: org.postgresql.Driver
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName: hive
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword: hive
+      SERVICE_PRECONDITION: "namenode:9870 datanode:9864 hive-metastore-postgresql:5432"
+    volumes:
+      - ./scripts/hive-metastore-entrypoint.sh:/opt/hive-bootstrap/hive-metastore-entrypoint.sh:ro
+
+  hive-server:
+    image: bde2020/hive:2.3.2-postgresql-metastore
+    container_name: crypto-hive-server
+    depends_on:
+      - hive-metastore
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://namenode:9000
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionURL: jdbc:postgresql://hive-metastore-postgresql/metastore
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionDriverName: org.postgresql.Driver
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionUserName: hive
+      HIVE_SITE_CONF_javax_jdo_option_ConnectionPassword: hive
+      HIVE_SITE_CONF_hive_metastore_uris: thrift://hive-metastore:9083
+      SERVICE_PRECONDITION: "hive-metastore:9083"
+
+  spark-master:
+    image: apache/spark:3.5.1
+    container_name: crypto-spark-master
+    depends_on:
+      - kafka
+      - hive-metastore
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      --host spark-master
+      --port 7077
+      --webui-port 8080
+    environment:
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      HIVE_METASTORE_URIS: thrift://hive-metastore:9083
+      HADOOP_FS_DEFAULTFS: hdfs://namenode:9000
+      SPARK_SQL_WAREHOUSE_DIR: hdfs://namenode:9000/user/hive/warehouse
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ./:/opt/spark-apps
+
+  spark-worker:
+    image: apache/spark:3.5.1
+    container_name: crypto-spark-worker
+    depends_on:
+      - spark-master
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+      --webui-port 8081
+    environment:
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    volumes:
+      - ./:/opt/spark-apps
+
+  producer:
+    image: maven:3.9.8-eclipse-temurin-17
+    container_name: crypto-java-producer
+    depends_on:
+      - kafka
+    working_dir: /app
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: crypto-trades
+    volumes:
+      - ./:/app
+    command: tail -f /dev/null
+
+  dashboard:
+    image: python:3.11-slim
+    container_name: crypto-streamlit-dashboard
+    depends_on:
+      - hive-server
+    working_dir: /app
+    environment:
+      HIVE_HOST: hive-server
+      HIVE_PORT: 10000
+      HIVE_USERNAME: hive
+      HIVE_DATABASE: crypto_analytics
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+    command: tail -f /dev/null
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:
+  hive_metastore_db:
