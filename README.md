@@ -1,11 +1,13 @@
 # Real-Time Crypto Analytics Pipeline
 
-Final Big Data course project using Kafka, Spark Structured Streaming, Hive, and Streamlit.
+Final Big Data course project implementing a real-time cryptocurrency analytics pipeline with Kafka, Spark Structured Streaming, Hive, and a React/FastAPI dashboard.
 
-## Architecture
+The system ingests live cryptocurrency trades, processes them in streaming windows, persists the processed analytics in Hive, and visualizes the latest results in a browser dashboard. This README is written as both setup documentation and a project report for evaluation.
+
+## Architecture Overview
 
 ```text
-Binance WebSocket
+Live crypto trades
       ↓
 Java Kafka Producer
       ↓
@@ -13,12 +15,23 @@ Kafka topic: crypto-trades
       ↓
 Spark Structured Streaming
       ↓
-Hive database/tables
+Hive managed tables on HDFS
       ↓
-Streamlit Dashboard reading from Hive
+React Dashboard reading from Hive through FastAPI
 ```
 
-This project intentionally uses **Hive as the persistent storage layer**. Spark writes processed micro-batch results into Hive tables using `foreachBatch`. The Streamlit dashboard does not read directly from Kafka, Spark memory, CSV files, Elasticsearch, or local-only Parquet files. It reads from Hive through HiveServer2.
+This project intentionally uses **Hive as the persistent storage layer**. Spark writes processed micro-batch results into Hive tables using `foreachBatch`. The dashboard does not read directly from Kafka, Spark memory, CSV files, Elasticsearch, or local-only Parquet files. The FastAPI backend reads from Hive through HiveServer2, and the React frontend renders the results.
+
+## Technology Stack
+
+| Layer | Technology | Purpose |
+| --- | --- | --- |
+| Ingestion | Java, Kafka, Zookeeper | Collect live trades and publish normalized events |
+| Stream processing | Spark Structured Streaming | Parse, enrich, window, and aggregate trade events |
+| Persistent storage | Hive, HDFS, PostgreSQL Metastore | Store processed analytical tables |
+| API | FastAPI, PyHive | Read Hive data and serve dashboard JSON |
+| Frontend | React, Plotly | Display metrics, charts, tables, and alerts |
+| Deployment | Docker Compose | Run the full stack locally |
 
 ## Requirement Mapping
 
@@ -54,7 +67,7 @@ ethusdt@trade
 solusdt@trade
 ```
 
-It normalizes each Binance trade event into this JSON format and publishes to Kafka topic `crypto-trades`:
+It normalizes each trade event into this JSON format and publishes to Kafka topic `crypto-trades`:
 
 ```json
 {
@@ -89,13 +102,14 @@ ETHUSDT,Ethereum,Layer 1 / Smart Contract
 SOLUSDT,Solana,Layer 1 / High Throughput
 ```
 
-Spark calculates 10-second window aggregations:
+Spark calculates 10-second event-time window aggregations:
 
 - average price by symbol
 - total volume by symbol
 - trade count by symbol
 - min price
 - max price
+- high-activity alert records when a symbol crosses the configured trade-count threshold
 
 ### Part 3: Hive Storage
 
@@ -133,15 +147,16 @@ The project uses a checkpoint directory for fault tolerance:
 /tmp/spark-checkpoints/crypto-trades
 ```
 
-### Part 4: Streamlit Dashboard
+### Part 4: React/FastAPI Dashboard
 
 Implemented in:
 
 ```text
-dashboard/app.py
+dashboard/backend/main.py
+dashboard/frontend/src/main.jsx
 ```
 
-The dashboard reads from Hive using PyHive and refreshes every 5 seconds.
+The dashboard API reads from Hive using PyHive. The React single-page app polls the API every 5 seconds and updates metrics, tables, and charts without reloading the whole page.
 
 It shows:
 
@@ -151,24 +166,34 @@ It shows:
 - min/max price table
 - latest alerts
 
+For stability, the FastAPI backend uses lightweight Hive reads and performs dashboard ordering and response limiting in the API process. It also keeps the last successful payload in memory so a temporary Hive read issue does not immediately blank the dashboard.
+
 ## Docker Services
 
 `docker-compose.yml` includes:
 
-- `zookeeper`
-- `kafka`
-- `kafka-ui`
-- `namenode`
-- `datanode`
-- `spark-master`
-- `spark-worker`
-- `hive-metastore`
-- `hive-server`
-- `hive-metastore-postgresql`
-- `producer`
-- `dashboard`
+| Service | Purpose |
+| --- | --- |
+| `zookeeper` | Kafka coordination |
+| `kafka` | Message broker for trade events |
+| `kafka-ui` | Browser UI for inspecting Kafka topics |
+| `namenode` | HDFS NameNode |
+| `datanode` | HDFS DataNode |
+| `spark-master` | Spark cluster master |
+| `spark-worker` | Spark worker node |
+| `hive-metastore` | Hive metadata service |
+| `hive-server` | HiveServer2 SQL endpoint |
+| `hive-metastore-postgresql` | PostgreSQL database for Hive Metastore metadata |
+| `producer` | Java market-data producer container |
+| `dashboard` | React/FastAPI dashboard container |
 
-HDFS is included because Hive normally stores managed table data in a warehouse directory. The persistent storage layer is still Hive: Spark writes to Hive tables and Streamlit reads from Hive tables.
+HDFS is included because Hive normally stores managed table data in a warehouse directory. The persistent storage layer is still Hive: Spark writes to Hive tables and the dashboard API reads from Hive tables.
+
+## Prerequisites
+
+- Docker Desktop or Docker Engine with Docker Compose v2.
+- Internet access on first run so Maven, npm, and Spark packages can be downloaded.
+- Recommended minimum: 6 GB RAM available to Docker for the full stack.
 
 ## Setup
 
@@ -178,10 +203,10 @@ From the project root:
 cd crypto-bigdata-pipeline
 ```
 
-Start all containers:
+Build and start all containers:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 Check containers:
@@ -198,13 +223,13 @@ Create the Kafka topic:
 
 Open useful UIs:
 
-```text
-Kafka UI:      http://localhost:8080
-Spark Master: http://localhost:8081
-HDFS UI:       http://localhost:9870
-Streamlit:     http://localhost:8501
-HiveServer2:   localhost:10000
-```
+| Component | URL |
+| --- | --- |
+| Dashboard | http://localhost:8501 |
+| Kafka UI | http://localhost:8080 |
+| Spark Master | http://localhost:8081 |
+| HDFS NameNode | http://localhost:9870 |
+| HiveServer2 | `localhost:10000` |
 
 ## Run Commands
 
@@ -222,7 +247,7 @@ Terminal 2: run Java Kafka producer:
 ./scripts/run-producer.sh
 ```
 
-Terminal 3: run Streamlit dashboard:
+Terminal 3: build React assets and restart the FastAPI dashboard service:
 
 ```bash
 ./scripts/run-dashboard.sh
@@ -234,6 +259,8 @@ Then open:
 http://localhost:8501
 ```
 
+After the producer and Spark job have run for 20-30 seconds, the dashboard should show processed Hive data.
+
 ## Demo Steps
 
 1. Start Docker services.
@@ -242,7 +269,7 @@ http://localhost:8501
 4. Start Java producer.
 5. Confirm events are flowing in Kafka UI.
 6. Wait for Spark to process a few 10-second windows.
-7. Open Streamlit dashboard.
+7. Open the dashboard.
 8. Show that dashboard data comes from Hive tables.
 
 ## Verify Kafka Topic
@@ -276,8 +303,12 @@ Run:
 SHOW DATABASES;
 USE crypto_analytics;
 SHOW TABLES;
-SELECT * FROM crypto_trade_summary ORDER BY processed_at DESC LIMIT 10;
-SELECT * FROM crypto_alerts ORDER BY processed_at DESC LIMIT 10;
+SELECT window_start, window_end, symbol, coin_name, category, avg_price, min_price, max_price, total_volume, trade_count, processed_at
+FROM crypto_trade_summary
+LIMIT 10;
+SELECT window_start, window_end, symbol, coin_name, alert_type, alert_message, current_avg_price, processed_at
+FROM crypto_alerts
+LIMIT 10;
 ```
 
 Expected `crypto_trade_summary` output columns:
@@ -292,9 +323,23 @@ Expected `crypto_alerts` output columns:
 window_start | window_end | symbol | coin_name | alert_type | alert_message | current_avg_price | processed_at
 ```
 
+## Verify Dashboard API
+
+```bash
+curl -sS http://localhost:8501/api/health
+curl -sS http://localhost:8501/api/summary
+curl -sS http://localhost:8501/api/alerts
+```
+
+Expected API behavior:
+
+- `/api/health` returns API status, Hive status, and refresh interval.
+- `/api/summary` returns recent rows from `crypto_analytics.crypto_trade_summary`.
+- `/api/alerts` returns recent rows from `crypto_analytics.crypto_alerts`.
+
 ## Expected Dashboard Output
 
-The Streamlit dashboard should show:
+The React dashboard should show:
 
 1. Metric cards for latest average price per symbol.
 2. Table with latest min price, max price, total volume, and trade count.
@@ -308,7 +353,9 @@ The Streamlit dashboard should show:
 - Kafka is used only for real-time ingestion.
 - Spark Structured Streaming is used for real-time processing.
 - Hive is the persistent storage layer.
-- Streamlit is only the dashboard layer and reads from Hive.
+- HDFS stores the managed Hive table files.
+- FastAPI is only the dashboard API layer and reads from Hive.
+- React is only the dashboard UI layer and gets processed results from the FastAPI API.
 - The static CSV is only used for enrichment before writing to Hive.
 - Processed results are not stored as CSV.
 - The project does not replace Hive with Elasticsearch, plain Parquet output, or any other storage layer.
@@ -318,6 +365,28 @@ The Streamlit dashboard should show:
 ### Dashboard says Hive has no data
 
 Run the producer and Spark job for at least 20–30 seconds. Spark writes data every 10 seconds.
+
+Check the dashboard API:
+
+```bash
+curl -sS http://localhost:8501/api/health
+```
+
+### Dashboard API returns 503
+
+Hive may still be starting or Spark may not have created the tables yet. Check the services and recent logs:
+
+```bash
+docker compose ps
+docker compose logs --tail 80 hive-server
+docker compose logs --tail 80 dashboard
+```
+
+After Hive is ready, restart only the dashboard service:
+
+```bash
+docker compose restart dashboard
+```
 
 ### Kafka topic does not exist
 
@@ -359,3 +428,5 @@ To remove volumes too:
 ```bash
 docker compose down -v
 ```
+
+Use `docker compose down -v` only when you intentionally want to delete persisted Kafka, Hive, HDFS, and PostgreSQL state.

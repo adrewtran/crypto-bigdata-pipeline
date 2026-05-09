@@ -168,8 +168,9 @@ services:
     command: tail -f /dev/null
 
   dashboard:
-    image: python:3.11-slim
-    container_name: crypto-streamlit-dashboard
+    build:
+      context: ./dashboard
+    container_name: crypto-react-dashboard
     depends_on:
       - hive-server
     working_dir: /app
@@ -182,7 +183,7 @@ services:
       - "8501:8501"
     volumes:
       - ./:/app
-    command: tail -f /dev/null
+    command: uvicorn dashboard.backend.main:app --host 0.0.0.0 --port 8501
 
 volumes:
   hadoop_namenode:

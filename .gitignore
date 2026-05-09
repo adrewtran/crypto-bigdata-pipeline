@@ -6,6 +6,10 @@ target/
 __pycache__/
 *.py[cod]
 
+# Frontend build/dependency output
+node_modules/
+dist/
+
 # Local environment files
 .env
 .venv/

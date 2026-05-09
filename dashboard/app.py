@@ -51,7 +51,7 @@ SYMBOL_COLORS = {
     "SOLUSDT": "#a78bfa",
 }
 
-st.set_page_config(page_title="Real-Time Crypto Analytics", layout="wide")
+st.set_page_config(page_title="CS523 Big data project", layout="wide")
 
 st.markdown(
     """
@@ -121,7 +121,7 @@ st.markdown(
     f"""
     <div class="pipeline-header">
       <div>
-        <p class="pipeline-title">Real-Time Crypto Analytics</p>
+        <p class="pipeline-title">CS523 Big data project</p>
         <p class="pipeline-subtitle">Coinbase/Binance -> Kafka -> Spark Structured Streaming -> Hive</p>
       </div>
       <div class="refresh-pill">Live refresh: {REFRESH_SECONDS}s</div>
@@ -253,7 +253,7 @@ def render_alerts(alerts_df: pd.DataFrame) -> None:
 def render_dashboard(df: pd.DataFrame, alerts_df: pd.DataFrame) -> None:
     if df.empty:
         status_slot.warning(
-            "No Hive data yet. Run the producer and Spark streaming job, then wait for a few 10-second windows."
+            "Waiting for the first Hive data window."
         )
         metrics_slot.empty()
         tables_slot.empty()
@@ -277,12 +277,12 @@ def live_dashboard() -> None:
         summary_df = run_query(SUMMARY_SQL)
         alerts_df = run_query(ALERTS_SQL)
         render_dashboard(summary_df, alerts_df)
-    except Exception as exc:
-        status_slot.error("Dashboard cannot read Hive yet. Start Hive, Spark streaming, and the producer first.")
+    except Exception:
+        status_slot.warning("Waiting for Hive data.")
         metrics_slot.empty()
         tables_slot.empty()
         charts_slot.empty()
-        alerts_slot.exception(exc)
+        alerts_slot.empty()
 
 
 live_dashboard()
