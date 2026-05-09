@@ -30,7 +30,23 @@ Implemented in:
 producer/src/main/java/com/example/producer/CryptoKafkaProducer.java
 ```
 
-The Java producer connects to Binance WebSocket combined trade streams:
+The Java producer defaults to Coinbase's public WebSocket because Binance can return HTTP 451 from some locations/networks. It subscribes to these Coinbase products:
+
+```text
+BTC-USD
+ETH-USD
+SOL-USD
+```
+
+It maps those products into the pipeline's USDT-style symbols:
+
+```text
+BTCUSDT
+ETHUSDT
+SOLUSDT
+```
+
+If Binance works in your environment, set `MARKET_DATA_SOURCE=binance`. The Binance mode connects to combined trade streams:
 
 ```text
 btcusdt@trade

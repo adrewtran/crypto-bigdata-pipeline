@@ -1,0 +1,18 @@
+# Java / Maven build output
+target/
+**/target/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Local environment files
+.env
+.venv/
+venv/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -12,6 +12,7 @@ import org.java_websocket.handshake.ServerHandshake;
 
 import java.net.URI;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 
@@ -21,8 +22,8 @@ public class CryptoKafkaProducer {
     public static void main(String[] args) throws Exception {
         String bootstrapServers = getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
         String topic = getenv("KAFKA_TOPIC", "crypto-trades");
-        String streams = getenv("BINANCE_STREAMS", "btcusdt@trade/ethusdt@trade/solusdt@trade");
-        String websocketUrl = "wss://stream.binance.com:9443/stream?streams=" + streams;
+        String marketDataSource = getenv("MARKET_DATA_SOURCE", "coinbase").toLowerCase();
+        String websocketUrl = websocketUrl(marketDataSource);
 
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -38,31 +39,22 @@ public class CryptoKafkaProducer {
         WebSocketClient client = new WebSocketClient(new URI(websocketUrl)) {
             @Override
             public void onOpen(ServerHandshake handshake) {
-                System.out.printf("Connected to Binance WebSocket: %s%n", websocketUrl);
+                System.out.printf("Connected to %s WebSocket: %s%n", marketDataSource, websocketUrl);
+                if ("coinbase".equals(marketDataSource)) {
+                    send(coinbaseSubscription());
+                }
             }
 
             @Override
             public void onMessage(String message) {
                 try {
-                    JsonNode root = MAPPER.readTree(message);
-                    JsonNode data = root.get("data");
-                    if (data == null || data.isMissingNode()) {
+                    ObjectNode normalized = normalizeMessage(marketDataSource, message);
+                    if (normalized == null) {
                         return;
                     }
 
-                    String symbol = data.get("s").asText();
-                    String price = data.get("p").asText();
-                    String quantity = data.get("q").asText();
-                    long tradeTime = data.get("T").asLong();
-                    long eventTime = data.get("E").asLong();
-
-                    ObjectNode normalized = MAPPER.createObjectNode();
-                    normalized.put("symbol", symbol);
-                    normalized.put("price", Double.parseDouble(price));
-                    normalized.put("quantity", Double.parseDouble(quantity));
-                    normalized.put("tradeTime", tradeTime);
-                    normalized.put("eventTime", eventTime);
-
+                    String symbol = normalized.get("symbol").asText();
+                    long eventTime = normalized.get("eventTime").asLong();
                     String payload = MAPPER.writeValueAsString(normalized);
                     producer.send(new ProducerRecord<>(topic, symbol, payload), (metadata, exception) -> {
                         if (exception != null) {
@@ -105,5 +97,66 @@ public class CryptoKafkaProducer {
     private static String getenv(String key, String defaultValue) {
         String value = System.getenv(key);
         return value == null || value.isBlank() ? defaultValue : value;
+    }
+
+    private static String websocketUrl(String marketDataSource) {
+        if ("binance".equals(marketDataSource)) {
+            String streams = getenv("BINANCE_STREAMS", "btcusdt@trade/ethusdt@trade/solusdt@trade");
+            String websocketBaseUrl = getenv("BINANCE_WS_BASE_URL", "wss://stream.binance.us:9443");
+            return websocketBaseUrl + "/stream?streams=" + streams;
+        }
+        return getenv("COINBASE_WS_URL", "wss://ws-feed.exchange.coinbase.com");
+    }
+
+    private static String coinbaseSubscription() {
+        String productIds = getenv("COINBASE_PRODUCT_IDS", "BTC-USD,ETH-USD,SOL-USD");
+        String productsJson = MAPPER.valueToTree(productIds.split(",")).toString();
+        return "{\"type\":\"subscribe\",\"channels\":[{\"name\":\"ticker\",\"product_ids\":" + productsJson + "}]}";
+    }
+
+    private static ObjectNode normalizeMessage(String marketDataSource, String message) throws Exception {
+        JsonNode root = MAPPER.readTree(message);
+        if ("binance".equals(marketDataSource)) {
+            return normalizeBinance(root);
+        }
+        return normalizeCoinbase(root);
+    }
+
+    private static ObjectNode normalizeBinance(JsonNode root) {
+        JsonNode data = root.get("data");
+        if (data == null || data.isMissingNode()) {
+            return null;
+        }
+
+        ObjectNode normalized = MAPPER.createObjectNode();
+        normalized.put("symbol", data.get("s").asText());
+        normalized.put("price", data.get("p").asDouble());
+        normalized.put("quantity", data.get("q").asDouble());
+        normalized.put("tradeTime", data.get("T").asLong());
+        normalized.put("eventTime", data.get("E").asLong());
+        return normalized;
+    }
+
+    private static ObjectNode normalizeCoinbase(JsonNode root) {
+        if (!"ticker".equals(root.path("type").asText())) {
+            return null;
+        }
+
+        long eventTime = parseCoinbaseTime(root.path("time").asText());
+        ObjectNode normalized = MAPPER.createObjectNode();
+        normalized.put("symbol", root.path("product_id").asText().replace("-", "") + "T");
+        normalized.put("price", root.path("price").asDouble());
+        normalized.put("quantity", root.path("last_size").asDouble());
+        normalized.put("tradeTime", eventTime);
+        normalized.put("eventTime", eventTime);
+        return normalized;
+    }
+
+    private static long parseCoinbaseTime(String value) {
+        try {
+            return Instant.parse(value).toEpochMilli();
+        } catch (DateTimeParseException ex) {
+            return System.currentTimeMillis();
+        }
     }
 }

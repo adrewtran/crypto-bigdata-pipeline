@@ -160,6 +160,9 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_TOPIC: crypto-trades
+      MARKET_DATA_SOURCE: coinbase
+      COINBASE_PRODUCT_IDS: BTC-USD,ETH-USD,SOL-USD
+      BINANCE_WS_BASE_URL: wss://stream.binance.us:9443
     volumes:
       - ./:/app
     command: tail -f /dev/null
